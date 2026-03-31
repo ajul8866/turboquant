@@ -21,6 +21,14 @@ import sys
 import time
 from pathlib import Path
 
+# Ensure turboquant package is importable from anywhere
+# Add parent directory to path if running from within the package directory
+_script_dir = Path(__file__).resolve().parent
+if str(_script_dir) in sys.path:
+    sys.path.remove(str(_script_dir))
+if str(_script_dir.parent) not in sys.path:
+    sys.path.insert(0, str(_script_dir.parent))
+
 import numpy as np
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
