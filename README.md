@@ -77,9 +77,11 @@ python hf_quantizer.py --model quantized_model --inference --prompt "Hello, how 
 
 ```
 turboquant/
-  turboquant.py          Core quantization algorithms (Lloyd-Max, MSE, Prod, QJL)
+  __init__.py            Package exports and metadata
+  core.py                Core quantization algorithms (Lloyd-Max, MSE, Prod, QJL)
   hf_quantizer.py        Hugging Face model quantizer CLI
   requirements.txt       Dependencies (numpy, scipy, torch, transformers)
+  setup.py               Package installation script
 ```
 
 ## Dependencies

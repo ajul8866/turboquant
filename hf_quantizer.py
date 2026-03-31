@@ -25,8 +25,7 @@ import numpy as np
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-import turboquant
-from turboquant import TurboQuantMSE, TurboQuantProd, get_bits_info, get_bits_info
+from turboquant import TurboQuantMSE, TurboQuantProd, get_bits_info
 
 
 class TurboQuantConfig:
@@ -48,10 +47,26 @@ class TurboQuantConfig:
         self.layer_bits = layer_bits or {}
         
     def get_bits_for_layer(self, layer_name: str) -> int:
-        """Dapatkan bit-width untuk layer tertentu, support per-layer."""
-        for prefix, bits in self.layer_bits.items():
-            if prefix in layer_name:
+        """Dapatkan bit-width untuk layer tertentu, support per-layer dengan pattern matching."""
+        # Exact match first
+        if layer_name in self.layer_bits:
+            return self.layer_bits[layer_name]
+        
+        # Pattern match: "model.layers.0-3" -> layers 0,1,2,3
+        for pattern, bits in self.layer_bits.items():
+            if "-" in pattern:
+                prefix, range_part = pattern.split("-", 1)
+                if layer_name.startswith(prefix):
+                    # Extract layer number
+                    parts = layer_name.split(".")
+                    if parts[-1].isdigit():
+                        layer_num = int(parts[-1])
+                        start, end = map(int, range_part.split("-"))
+                        if start <= layer_num <= end:
+                            return bits
+            elif pattern in layer_name:
                 return bits
+        
         return self.bits
 
 
@@ -65,7 +80,8 @@ class QuantizedLinear(torch.nn.Module):
         self.bias = original_linear.bias
         
         # Dapatkan bit-width untuk layer ini
-        bits = config.get_bits_for_layer(f"layer_{layer_idx}" if layer_idx is not None else "")
+        layer_name = f"model.layers.{layer_idx}" if layer_idx is not None else ""
+        bits = config.get_bits_for_layer(layer_name)
         
         # Flatten weight matrix ke vectors
         weight = original_linear.weight.data.cpu().numpy()
@@ -106,7 +122,7 @@ class QuantizedLinear(torch.nn.Module):
             self.register_buffer("gamma", torch.tensor(np.array(gamma_list), dtype=torch.float32))
         
         # Rotation matrix (shared atau per-vector)
-        self.register_buffer("rotation_matrix", torch.tensor(self.quantizer.R, dtype=torch.float32))
+        self.register_buffer("rotation_matrix", torch.tensor(self.quantizer.Pi, dtype=torch.float32))
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Dequantize weight on-the-fly
@@ -225,71 +241,95 @@ def main():
     parser.add_argument("--max-new-tokens", type=int, default=50)
     parser.add_argument("--device-map", type=str, default="auto")
     parser.add_argument("--layer-bits", type=str, default=None,
-                       help='JSON dict: {"layer_0-3": 2, "layer_4-8": 4, "layer_9+": 8}')
+                       help='JSON dict: {"model.layers.0-3": 2, "model.layers.4-8": 4, "model.layers.9+": 8}')
     
     args = parser.parse_args()
     
-    # Parse layer bits
-    layer_bits = {}
-    if args.layer_bits:
-        layer_bits = json.loads(args.layer_bits)
-    
-    # Buat config
-    config = TurboQuantConfig(bits=args.bits, mode=args.mode, layer_bits=layer_bits)
-    
-    # Load model
-    print(f"Loading model: {args.model}")
-    print(f"Bit-width: {args.bits}, Mode: {args.mode}")
-    
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model,
-        torch_dtype=torch.float16,
-        device_map=args.device_map,
-    )
-    
-    # Quantize
-    print("\nQuantizing model...")
-    start = time.time()
-    stats = quantize_model(model, config)
-    quant_time = time.time() - start
-    print(f"Quantization time: {quant_time:.1f}s")
-    
-    # Simpan model
-    if not args.inference:
-        output_dir = Path(args.output)
-        output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        # Parse layer bits
+        layer_bits = {}
+        if args.layer_bits:
+            try:
+                layer_bits = json.loads(args.layer_bits)
+            except json.JSONDecodeError as e:
+                print(f"Error: Invalid JSON in --layer-bits: {e}", file=sys.stderr)
+                sys.exit(1)
         
-        # Simpan quantized state
-        torch.save(model.state_dict(), output_dir / "pytorch_model.bin")
+        # Buat config
+        config = TurboQuantConfig(bits=args.bits, mode=args.mode, layer_bits=layer_bits)
         
-        # Simpan config dan stats
-        with open(output_dir / "quantization_config.json", "w") as f:
-            json.dump({
-                "bits": args.bits,
-                "mode": args.mode,
-                "stats": stats,
-                "quantization_time": quant_time,
-            }, f, indent=2)
+        # Load model
+        print(f"Loading model: {args.model}")
+        print(f"Bit-width: {args.bits}, Mode: {args.mode}")
         
-        print(f"\nSaved to: {output_dir}")
-    
-    # Inference (opsional)
-    if args.inference:
-        tokenizer = AutoTokenizer.from_pretrained(args.model)
-        print(f"\n=== Inference ===")
-        print(f"Prompt: {args.prompt}")
-        inputs = tokenizer(args.prompt, return_tensors="pt").to(model.device)
-        
-        with torch.no_grad():
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=args.max_new_tokens,
-                do_sample=True,
-                temperature=0.7,
+        try:
+            model = AutoModelForCausalLM.from_pretrained(
+                args.model,
+                torch_dtype=torch.float16,
+                device_map=args.device_map,
             )
+        except Exception as e:
+            print(f"Error loading model: {e}", file=sys.stderr)
+            print("Make sure the model name is correct and you have internet connection.", file=sys.stderr)
+            sys.exit(1)
         
-        output_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        print(f"\nOutput:\n{output_text}")
+        # Quantize
+        print("\nQuantizing model...")
+        start = time.time()
+        stats = quantize_model(model, config)
+        quant_time = time.time() - start
+        print(f"Quantization time: {quant_time:.1f}s")
+        
+        # Simpan model
+        if not args.inference:
+            output_dir = Path(args.output)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Simpan quantized state
+            torch.save(model.state_dict(), output_dir / "pytorch_model.bin")
+            
+            # Simpan config dan stats
+            with open(output_dir / "quantization_config.json", "w") as f:
+                json.dump({
+                    "bits": args.bits,
+                    "mode": args.mode,
+                    "stats": stats,
+                    "quantization_time": quant_time,
+                }, f, indent=2)
+            
+            print(f"\nSaved to: {output_dir}")
+        
+        # Inference (opsional)
+        if args.inference:
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(args.model)
+            except Exception as e:
+                print(f"Error loading tokenizer: {e}", file=sys.stderr)
+                sys.exit(1)
+            
+            print(f"\n=== Inference ===")
+            print(f"Prompt: {args.prompt}")
+            inputs = tokenizer(args.prompt, return_tensors="pt").to(model.device)
+            
+            with torch.no_grad():
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=args.max_new_tokens,
+                    do_sample=True,
+                    temperature=0.7,
+                )
+            
+            output_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            print(f"\nOutput:\n{output_text}")
+    
+    except KeyboardInterrupt:
+        print("\nInterrupted by user.", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"\nUnexpected error: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":

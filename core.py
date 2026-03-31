@@ -422,9 +422,9 @@ class TurboQuantProd:
         self.b = b
 
         if b < 2:
-            warnings.warn(
-                f"TurboQuantProd with b={b} uses b-1={b-1} bits for MSE. "
-                f"Consider b>=2.", UserWarning)
+            raise ValueError(
+                f"TurboQuantProd requires b>=2 (got b={b}). "
+                f"Needs at least 1 bit for MSE + 1 bit for QJL.")
 
         b_mse = b - 1
         self.mse_quantizer = TurboQuantMSE(

@@ -1,9 +1,45 @@
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
-*.egg-info/
-.pytest_cache/
-dist/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
 build/
+dist/
+*.egg-info/
 *.egg
+MANIFEST
+
+# Environments
+env/
+venv/
+ENV/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Quantized models (large files)
+quantized_model/
+*.bin
+*.safetensors
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# mypy
+.mypy_cache/
+.dmypy.json
+
+# Local config
 .env
 config.json
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
