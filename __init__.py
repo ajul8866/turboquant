@@ -20,7 +20,6 @@ from .core import (
     get_compressed_size_bits,
     mse_theoretical_bound,
     inner_prod_theoretical_bound,
-    run_demo,
 )
 
 __all__ = [
@@ -37,7 +36,6 @@ __all__ = [
     "get_compressed_size_bits",
     "mse_theoretical_bound",
     "inner_prod_theoretical_bound",
-    "run_demo",
 ]
 
 __version__ = "0.1.0"
