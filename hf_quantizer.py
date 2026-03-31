@@ -92,7 +92,11 @@ class QuantizedLinear(torch.nn.Module):
         bits = config.get_bits_for_layer(layer_name)
         
         # Flatten weight matrix ke vectors
-        weight = original_linear.weight.data.cpu().numpy()
+        # Handle BFloat16 by converting to Float32 first (numpy doesn't support BFloat16)
+        weight_tensor = original_linear.weight.data.cpu()
+        if weight_tensor.dtype == torch.bfloat16:
+            weight_tensor = weight_tensor.float()
+        weight = weight_tensor.numpy()
         out_features, in_features = weight.shape
         
         # Reshape: setiap row adalah vektor yang akan di-quantize
